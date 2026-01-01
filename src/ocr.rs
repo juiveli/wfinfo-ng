@@ -225,7 +225,10 @@ pub fn detect_theme(image: &DynamicImage) -> Theme {
 /// 4. Uses scaling detection to handle UI size variations
 /// 5. Returns a vector of cropped images, one for each reward
 pub fn extract_parts(image: &DynamicImage, theme: Theme) -> Vec<DynamicImage> {
-    image.save("input.png").unwrap();
+
+    
+    let save_path = std::env::temp_dir().join("input.png");
+    image.save(&save_path).expect("Failed to save image to temp directory");
     let screen_scaling = if image.width() * 9 > image.height() * 16 {
         image.height() as f32 / 1080.0
     } else {
