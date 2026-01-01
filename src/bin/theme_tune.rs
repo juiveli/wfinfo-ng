@@ -93,7 +93,7 @@ fn spawn_ocr_thread(
             let strings = ocr::reward_image_to_reward_names(
                 image.clone(),
                 Some(Theme::Custom(last_request.to_ordered())),
-            );
+            ).unwrap();
             let results = strings
                 .iter()
                 .map(|string| {

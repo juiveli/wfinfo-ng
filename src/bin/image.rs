@@ -18,8 +18,14 @@ fn main() {
         let detections = reward_image_to_reward_names(image.clone(), None);
         println!("{:#?}", detections);
 
-        let text: Vec<_> = detections.iter().map(|s| normalize_string(s)).collect();
-        println!("{:#?}", text);
+        // 1. Get the Vec out of the Result first
+        let detections_vec = detections.expect("OCR failed"); 
+
+        // 2. Now iterate over the strings
+        let text: Vec<String> = detections_vec
+            .iter()
+            .map(|s| normalize_string(s)) // Now 's' is a &String, which works as &str
+            .collect();
 
         let db = Database::load_from_file(None, None, Some(1.0), Some(35.0 / 3.0));
         let items: Vec<_> = text.iter().map(|s| db.find_item(s, None)).collect();
@@ -46,7 +52,7 @@ fn main() {
                 .to_string_lossy()
                 .to_string(),
             Label {
-                theme,
+                theme: theme.expect("Theme was not loaded correctly"),
                 items: item_names,
             },
         );

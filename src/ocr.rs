@@ -93,12 +93,13 @@ pub fn extract_part(
 /// # Arguments
 /// * `tesseract` - Mutable reference to the Tesseract instance
 /// * `image` - Image to perform OCR on
-pub fn image_to_string(tesseract: &mut Option<Tesseract>, image: &DynamicImage) -> String {
+pub fn image_to_string(tesseract: &mut Option<Tesseract>, image: &DynamicImage) -> Result<String, String> {
     debug!("Running OCR on {}x{} image", image.width(), image.height());
-    let mut ocr = tesseract.take().unwrap();
+    let mut ocr = tesseract.take().ok_or("Tesseract OCR engine was not initialized")?;
 
     // Convert image to format required by Tesseract
-    let buffer = image.as_flat_samples_u8().unwrap();
+    let buffer = image.as_flat_samples_u8()
+    .ok_or("Failed to convert image to flat byte buffer (unsupported format)")?;
     ocr = ocr
         .set_frame(
             buffer.samples,
@@ -113,7 +114,7 @@ pub fn image_to_string(tesseract: &mut Option<Tesseract>, image: &DynamicImage) 
     debug!("OCR result: {}", result.trim());
     tesseract.replace(ocr);
 
-    result
+    Ok(result)
 }
 
 /// Parameters for OCR selection processing
@@ -133,7 +134,7 @@ pub struct SelectionParams {
 /// # Arguments
 /// * `image` - Source image
 /// * `params` - Selection parameters including coordinates, dimensions, and OCR settings
-pub fn selection_to_part_name(image: DynamicImage, params: SelectionParams) -> Option<String> {
+pub fn selection_to_part_name(image: DynamicImage, params: SelectionParams) -> Result<Option<String>, String> {
     // Convert absolute screen coordinates to image-relative coordinates
     let x = params.abs_x - params.monitor_x;
     let y = params.abs_y - params.monitor_y;
@@ -149,13 +150,13 @@ pub fn selection_to_part_name(image: DynamicImage, params: SelectionParams) -> O
         (x, y),
         params.brightness,
         params.contrast,
-    );
+    )?;
     if text.trim().is_empty() {
         debug!("No text detected in selection");
-        return None;
+        return Ok(None);
     }
 
-    Some(text)
+    Ok(Some(text))
 }
 
 /// Removes all non-ASCII-alphabetic characters from a string
@@ -171,7 +172,7 @@ pub fn normalize_string(string: &str) -> String {
 /// 2. Sampling pixels in the expected reward area
 /// 3. Comparing colors to known theme colors
 /// 4. Returning the most prevalent theme
-pub fn detect_theme(image: &DynamicImage) -> Theme {
+pub fn detect_theme(image: &DynamicImage) -> Result<Theme, String> {
     let screen_scaling = if image.width() * 9 > image.height() * 16 {
         image.height() as f32 / 1080.0
     } else {
@@ -208,12 +209,14 @@ pub fn detect_theme(image: &DynamicImage) -> Theme {
 
     debug!("{:#?}", weights);
 
-    weights
-        .iter()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .unwrap()
-        .0
-        .to_owned()
+    let best_match = weights
+    .iter()
+    .max_by(|a, b| a.1.total_cmp(b.1))
+    .ok_or("OCR identified no valid parts (weights list is empty)")?
+    .0
+    .to_owned();
+    
+    Ok(best_match)
 }
 
 /// Extracts individual reward parts from a reward screen image
@@ -516,15 +519,19 @@ lazy_static! {
 /// 2. Extracts individual reward parts
 /// 3. Performs OCR on each part
 /// 4. Returns a vector of reward names
-pub fn reward_image_to_reward_names(image: DynamicImage, theme: Option<Theme>) -> Vec<String> {
-    let theme = theme.unwrap_or_else(|| detect_theme(&image));
+pub fn reward_image_to_reward_names(image: DynamicImage, theme: Option<Theme>) -> Result<Vec<String>, String>{
+    let theme = match theme {
+        Some(t) => t,
+        None => detect_theme(&image)?
+    };
     let parts = extract_parts(&image, theme);
     debug!("Extracted part images");
 
-    parts
-        .iter()
-        .map(|image| image_to_string(&mut OCR.lock().unwrap(), image))
-        .collect()
+    parts.iter().map(|image| {
+        let mut ocr_guard = OCR.lock().map_err(|_| "OCR Mutex was poisoned")?;
+        image_to_string(&mut ocr_guard, image)
+    }).collect::<Result<Vec<_>, _>>()
+
 }
 
 /// Processes a single part image and returns its name
@@ -543,10 +550,11 @@ pub fn part_image_to_part_name(
     sel_pos: (i32, i32),
     brightness: i32,
     contrast: f32,
-) -> String {
+) -> Result<String, String> {
     let part = extract_part(&image, sel_size, sel_pos, brightness, contrast);
     debug!("Extracted part image");
 
-    let text = image_to_string(&mut OCR.lock().unwrap(), &part);
-    text
+    let mut ocr_engine = OCR.lock().map_err(|_| "OCR engine lock is poisoned")?;
+    let text = image_to_string(&mut ocr_engine, &part);
+    Ok(text?)
 }

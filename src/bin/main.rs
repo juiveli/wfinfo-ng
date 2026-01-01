@@ -28,12 +28,12 @@ use wfinfo::{
     app_events::AppEvent,
 };
 
-fn run_detection(capturer: &Window, db: &Database, arguments: &Arguments) {
-    let frame = capturer.capture_image().unwrap();
+fn run_detection(capturer: &Window, db: &Database, arguments: &Arguments) -> Result<(), String> {
+    let frame = capturer.capture_image().map_err(|e| e.to_string())?;
     info!("Captured");
     let image = DynamicImage::ImageRgba8(frame);
     info!("Converted");
-    let text = reward_image_to_reward_names(image, None);
+    let text = reward_image_to_reward_names(image, None)?;
     let text = text.iter().map(|s| normalize_string(s));
     debug!("{:#?}", text);
 
@@ -92,33 +92,27 @@ fn run_detection(capturer: &Window, db: &Database, arguments: &Arguments) {
             warn!("Unknown item\n\tUnknown");
         }
     }
+    Ok(())
 }
 
-fn run_snapit(window: &Window, db: &Database, arguments: &Arguments) -> Option<String> {
+fn run_snapit(window: &Window, db: &Database, arguments: &Arguments) -> Result<Option<String>, String> {
     // Capture the window
-    let frame = window.capture_image().ok()?;
+    let frame = window.capture_image().unwrap();
     let image = DynamicImage::ImageRgba8(frame);
     debug!("Captured window image");
 
     // Run slop to get the selection
-    let slop_output = match Command::new("slop")
+    let slop_output = Command::new("slop") // No semicolon here!
         .args(["-b", "3", "-c", "1,0,0,0.8"])
-        .output() {
-            Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                error!("Could not find 'slop' command. Please install slop using your system package manager (e.g., 'sudo apt install slop' or 'nix-env -iA slop')");
-                return None;
-            }
-            Err(e) => {
-                error!("Failed to run slop: {}", e);
-                return None;
-            }
-    };
+        .output()
+        .expect("Failed to execute slop");
+
     let slop_output = String::from_utf8_lossy(&slop_output.stdout);
     debug!("Slop output: {}", slop_output);
 
     // Parse the selection coordinates
-    let selection = slop_to_selection(&slop_output)?;
+    let selection = slop_to_selection(&slop_output)
+    .ok_or("Failed to parse selection coordinates from slop".to_string())?;
     debug!(
         "Selection: {}x{} at {},{}",
         selection.width, selection.height, selection.x, selection.y
@@ -140,10 +134,17 @@ fn run_snapit(window: &Window, db: &Database, arguments: &Arguments) -> Option<S
         contrast: arguments.ocr_contrast,
     };
 
-    let text = selection_to_part_name(image.clone(), params)?;
 
-    // Look up the item in the database
-    let item = db.find_item(&normalize_string(&text), None);
+    let text = selection_to_part_name(image.clone(), params)?;
+    let item = if let Some(ref t) = text {
+        // Look up the item in the database
+        db.find_item(&normalize_string(t), None)
+    } else {
+        None
+    };
+
+    
+    
     if let Some(item) = item {
         match arguments.info_display_mode {
             InfoDisplayMode::Minimal => {
@@ -238,7 +239,7 @@ fn run_snapit(window: &Window, db: &Database, arguments: &Arguments) -> Option<S
         info!("No item found");
     }
 
-    Some(text)
+    Ok(text)
 }
 
 fn log_watcher(path: PathBuf, event_sender: mpsc::Sender<AppEvent>) {
@@ -337,9 +338,9 @@ fn benchmark() -> Result<(), Box<dyn Error>> {
     for _ in 0..10 {
         let image = image::open("input3.png").unwrap();
         println!("Converted");
-        let text = reward_image_to_reward_names(image, None);
+        let names = reward_image_to_reward_names(image, None).unwrap();
         println!("got names");
-        let text = text.iter().map(|s| normalize_string(s));
+        let text = names.iter().map(|s| normalize_string(s));
         println!("{:#?}", text);
     }
     // clean up tesseract
@@ -488,10 +489,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             AppEvent::Detection => {
                 info!("Capturing");
-                run_detection(warframe_window, &db, &arguments)
+                run_detection(warframe_window, &db, &arguments)?
             }
             AppEvent::LogTrigger => {
-                run_detection(warframe_window, &db, &arguments)
+                run_detection(warframe_window, &db, &arguments)?
             }
         }
     }
@@ -521,7 +522,7 @@ mod test {
             .unwrap()
             .decode()
             .unwrap();
-        let text = reward_image_to_reward_names(image, None);
+        let text = reward_image_to_reward_names(image, None).unwrap();
         let text = text.iter().map(|s| normalize_string(s));
         println!("{:#?}", text);
         let db = Database::load_from_file(None, None, Some(1.0), Some(35.0 / 3.0));
@@ -556,7 +557,7 @@ mod test {
                 .unwrap()
                 .decode()
                 .unwrap();
-            let text = reward_image_to_reward_names(image, None);
+            let text = reward_image_to_reward_names(image, None).unwrap();
             let text: Vec<_> = text.iter().map(|s| normalize_string(s)).collect();
             println!("{:#?}", text);
 
@@ -591,7 +592,7 @@ mod test {
                     .unwrap()
                     .decode()
                     .unwrap();
-                let text = reward_image_to_reward_names(image, None);
+                let text = reward_image_to_reward_names(image, None).unwrap();
                 let text: Vec<_> = text.iter().map(|s| normalize_string(s)).collect();
                 println!("{:#?}", text);
 
